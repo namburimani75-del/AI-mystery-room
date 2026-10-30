@@ -24,37 +24,75 @@ const checkRequiredEnv = () => {
 };
 checkRequiredEnv();
 
-// Security middleware
-app.use(helmet());
+// Security middleware with cross-origin resource policy allowed for web clients
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
+}));
 
-// CORS configuration supporting single origin, comma-separated origins, and Vercel preview domains
-const configuredClientUrls = (process.env.CLIENT_URL || 'http://localhost:5173')
+// Allowed frontend origins: explicit production URLs, development URLs, and dynamic env/Vercel domains
+const staticAllowedOrigins = [
+  'https://ai-mystery-room-6vfevgnss-ruthless9.vercel.app',
+  'https://ai-mystery-room-rose.vercel.app',
+  'http://localhost:5173',
+  'http://localhost:3000',
+  'http://localhost:5000',
+];
+
+const configuredClientUrls = (process.env.CLIENT_URL || '')
   .split(',')
-  .map(url => url.trim().replace(/\/+$/, ''));
+  .map(url => url.trim().replace(/\/+$/, ''))
+  .filter(Boolean);
 
-app.use(cors({
+const isOriginAllowed = (origin) => {
+  // Allow non-browser requests (e.g. curl, server-to-server, Render health check)
+  if (!origin) return true;
+
+  const cleanOrigin = origin.trim().replace(/\/+$/, '');
+
+  // Exact static and environment matches
+  if (staticAllowedOrigins.includes(cleanOrigin)) return true;
+  if (configuredClientUrls.includes(cleanOrigin) || configuredClientUrls.includes('*')) return true;
+
+  // Allow all Vercel domains (e.g. production domains and preview branches)
+  try {
+    const parsed = new URL(cleanOrigin);
+    if (parsed.hostname.endsWith('.vercel.app')) {
+      return true;
+    }
+  } catch {
+    // Ignore invalid URL format
+  }
+
+  // Allow localhost origins during local testing
+  if (cleanOrigin.startsWith('http://localhost:') || cleanOrigin.startsWith('http://127.0.0.1:')) {
+    return true;
+  }
+
+  return false;
+};
+
+const corsOptions = {
   origin: (origin, callback) => {
-    // Allow non-browser requests (e.g. curl, server-to-server, Render health check)
-    if (!origin) return callback(null, true);
-
-    const cleanOrigin = origin.replace(/\/+$/, '');
-    const isAllowed = configuredClientUrls.some(allowed => {
-      if (allowed === '*') return true;
-      if (allowed === cleanOrigin) return true;
-      // Allow Vercel preview URLs if base vercel domain is configured
-      if (allowed.includes('.vercel.app') && cleanOrigin.endsWith('.vercel.app')) return true;
-      return false;
-    });
-
-    if (isAllowed || process.env.NODE_ENV !== 'production') {
+    if (isOriginAllowed(origin)) {
       return callback(null, true);
     }
-    return callback(new Error(`CORS blocked for origin: ${origin}`));
+    // Return callback(null, false) to reject gracefully without throwing 500 error
+    return callback(null, false);
   },
-  methods: ['GET', 'POST', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'x-player-id'],
-  credentials: true,
-}));
+  methods: ['GET', 'POST', 'DELETE', 'OPTIONS', 'HEAD'],
+  allowedHeaders: [
+    'Content-Type',
+    'Authorization',
+    'x-player-id',
+    'Accept',
+    'Origin',
+    'X-Requested-With',
+  ],
+  optionsSuccessStatus: 204,
+};
+
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
 
 // Rate limiting
 const limiter = rateLimit({
